@@ -64,13 +64,71 @@ tests/               pytest + Alembic 마이그레이션 기반 테스트 DB
 
 ### 데이터 모델
 
-| 테이블 | 비고 |
-|---|---|
-| `user` | OAuth provider, login_id(unique), soft delete(`deleted_at`) |
-| `scrap` | `task_id`(unique) · `status` · `type` · `subject`/`content` · `origin_url`/`text` · `is_public` · `like_count`/`view_count`, FK → user, category |
-| `category` | 사용자별 카테고리 |
-| `comment` | FK → user, scrap |
-| `scrap_like` | (`user_id`, `scrap_id`) 복합 PK |
+```mermaid
+erDiagram
+    USER ||--o{ SCRAP : "작성"
+    USER ||--o{ CATEGORY : "소유"
+    USER ||--o{ COMMENT : "작성"
+    USER ||--o{ SCRAP_LIKE : "공감"
+    CATEGORY |o--o{ SCRAP : "분류"
+    SCRAP ||--o{ COMMENT : "댓글"
+    SCRAP ||--o{ SCRAP_LIKE : "공감받음"
+
+    USER {
+        int id PK
+        string provider "google 등 OAuth provider"
+        string login_id UK
+        string password
+        string email
+        string name
+        string profile_url
+        timestamp created_at
+        timestamp modified_at
+        timestamp deleted_at "soft delete"
+    }
+
+    SCRAP {
+        int id PK
+        string task_id UK "Celery 작업 추적용 UUID"
+        string status "processing | completed | failed"
+        int user_id FK
+        int category_id FK "nullable, 기본값 '기타'"
+        string type "oneline | fiveline | insight | basic"
+        string subject "LLM 생성 제목"
+        string content "LLM 생성 요약"
+        boolean is_public
+        int like_count
+        int view_count
+        string origin_url "nullable"
+        text text "nullable, 직접 입력한 본문"
+        timestamp created_at
+        timestamp modified_at
+    }
+
+    CATEGORY {
+        int id PK
+        int user_id FK
+        string name
+    }
+
+    COMMENT {
+        int id PK
+        int user_id FK
+        int scrap_id FK
+        string content
+        timestamp created_at
+    }
+
+    SCRAP_LIKE {
+        int user_id PK, FK
+        int scrap_id PK, FK
+    }
+```
+
+- `scrap.task_id`: API가 202로 돌려주는 UUID. 워커가 이 값으로 행을 찾아 `status`·`subject`·`content`를 갱신한다.
+- `scrap_like`: (`user_id`, `scrap_id`) 복합 PK로 한 사용자가 같은 스크랩에 중복 공감하지 못하게 막는다. `scrap.like_count`는 조회 비용을 줄이기 위한 반정규화 컬럼.
+- `category.user_id`: 모델상 FK 제약은 없고 사용자별 카테고리를 구분하는 용도. 스크랩 생성 시 `category_id`가 없으면 해당 사용자의 "기타" 카테고리를 찾아 넣는다.
+- `user.deleted_at`: soft delete. 탈퇴해도 스크랩·댓글의 FK가 깨지지 않는다.
 
 ## 기술 스택
 
